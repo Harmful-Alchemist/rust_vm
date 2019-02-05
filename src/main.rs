@@ -7,28 +7,45 @@ enum registers {
     R_R5,
     R_R6,
     R_R7,
-    R_PC, /* program counter */
+    R_PC,
+    /* program counter */
     R_COND,
     R_COUNT,
 }
 
 enum opcodes {
-    OP_BR = 0, /* branch */
-    OP_ADD,    /* add  */
-    OP_LD,     /* load */
-    OP_ST,     /* store */
-    OP_JSR,    /* jump register */
-    OP_AND,    /* bitwise and */
-    OP_LDR,    /* load register */
-    OP_STR,    /* store register */
-    OP_RTI,    /* unused */
-    OP_NOT,    /* bitwise not */
-    OP_LDI,    /* load indirect */
-    OP_STI,    /* store indirect */
-    OP_JMP,    /* jump */
-    OP_RES,    /* reserved (unused) */
-    OP_LEA,    /* load effective address */
-    OP_TRAP,   /* execute trap */
+    OP_BR = 0,
+    /* branch */
+    OP_ADD,
+    /* add  */
+    OP_LD,
+    /* load */
+    OP_ST,
+    /* store */
+    OP_JSR,
+    /* jump register */
+    OP_AND,
+    /* bitwise and */
+    OP_LDR,
+    /* load register */
+    OP_STR,
+    /* store register */
+    OP_RTI,
+    /* unused */
+    OP_NOT,
+    /* bitwise not */
+    OP_LDI,
+    /* load indirect */
+    OP_STI,
+    /* store indirect */
+    OP_JMP,
+    /* jump */
+    OP_RES,
+    /* reserved (unused) */
+    OP_LEA,
+    /* load effective address */
+    OP_TRAP,
+    /* execute trap */
 }
 
 impl opcodes {
@@ -38,9 +55,12 @@ impl opcodes {
 }
 
 enum condition_flags {
-    FL_POS = 1 << 0, /* P */
-    FL_ZRO = 1 << 1, /* Z */
-    FL_NEG = 1 << 2, /* N */
+    FL_POS = 1 << 0,
+    /* P */
+    FL_ZRO = 1 << 1,
+    /* Z */
+    FL_NEG = 1 << 2,
+    /* N */
 }
 
 struct VM {
@@ -61,27 +81,17 @@ impl VM {
             /* FETCH */
             let instr = mem_read(self.reg[registers::R_PC as usize]);
             self.reg[registers::R_PC as usize] += 1; // Post increment program counter
-            let op = instr >> 12;
-
             match opcodes::from_integer(op) {
                 opcodes::OP_ADD => self.add(op),
                 opcodes::OP_AND => self.and(op),
                 opcodes::OP_NOT => self.not(op),
                 opcodes::OP_BR => self.br(op),
                 opcodes::OP_JMP => self.jmp(op),
-                 opcodes::OP_JSR => self.jsr(op),
-                // case OP_LD:
-                //     {LD, 7}
-                //     break;
+                opcodes::OP_JSR => self.jsr(op),
+                opcodes::OP_LD => self.ld(op),
                 opcodes::OP_LDI => self.ldi(op),
-                //     {LDI, 6}
-                //     break;
-                // case OP_LDR:
-                //     {LDR, 7}
-                //     break;
-                // case OP_LEA:
-                //     {LEA, 7}
-                //     break;
+                opcodes::OP_LDR => self.ldr(op),
+                opcodes::OP_LEA => self.lea(op),
                 // case OP_ST:
                 //     {ST, 7}
                 //     break;
@@ -96,6 +106,8 @@ impl VM {
                 //     break;
                 _ => (),
             }
+
+            let op = instr >> 12;
         }
     }
     fn add(&mut self, instr: u16) {
@@ -163,10 +175,31 @@ impl VM {
         let jsr = (instr >> 11) & 1;
         if jsr > 0 {
             let pc_offset = sign_extend(instr & 0x7FF, 11);
-             self.reg[registers::R_PC as usize] += pc_offset;
+            self.reg[registers::R_PC as usize] += pc_offset;
         } else {
             //jsrr
             self.reg[registers::R_PC as usize] = (instr >> 6) & 0x7;
+        }
+    }
+
+    fn ld(&mut self, instr: u16) {
+        /* destination register (DR) */
+        let r0 = (instr >> 9) & 0x7;
+        /* PCoffset 9*/
+        let pc_offset = sign_extend(instr & 0x1ff, 9);
+        /* add pc_offset to the current PC, look at that memory location to get the final address */
+        self.reg[r0 as usize] = mem_read(self.reg[registers::R_PC as usize] + pc_offset);
+        self.update_flags(r0);
+    }
+
+    fn update_flags(&mut self, r: u16) {
+        let r_val = self.reg[r as usize];
+        self.reg[registers::R_COND as usize] = if r_val > 0 {
+            condition_flags::FL_ZRO as u16
+        } else if (r_val >> 15) > 0 {
+            condition_flags::FL_NEG as u16
+        } else {
+            condition_flags::FL_POS as u16
         }
     }
 
@@ -180,15 +213,19 @@ impl VM {
         self.update_flags(r0);
     }
 
-    fn update_flags(&mut self, r: u16) {
-        let r_val = self.reg[r as usize];
-        self.reg[registers::R_COND as usize] = if r_val > 0 {
-            condition_flags::FL_ZRO as u16
-        } else if (r_val >> 15) > 0 {
-            condition_flags::FL_NEG as u16
-        } else {
-            condition_flags::FL_POS as u16
-        }
+    fn ldr(&mut self, instr: u16) {
+        // 0x40 ? 64 / 16 =  4 ???
+        let offset: u16 = sign_extend(instr & 0b11_1111, 6);
+
+        let dr = (instr >> 9) & 0b111;
+        let baser = (instr >> 6) & 0b111;
+
+        self.reg[dr as usize] = mem_read(self.reg[baser as usize] + offset);
+        self.update_flags(dr);
+    }
+
+    fn lea(&mut self, instr: u16){
+
     }
 }
 
