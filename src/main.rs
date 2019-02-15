@@ -7,8 +7,7 @@ enum registers {
     R_R5,
     R_R6,
     R_R7,
-    R_PC,
-    /* program counter */
+    R_PC, /* program counter */
     R_COND,
     R_COUNT,
 }
@@ -80,6 +79,7 @@ impl VM {
         while running {
             /* FETCH */
             let instr = mem_read(self.reg[registers::R_PC as usize]);
+            let op = instr >> 12;
             self.reg[registers::R_PC as usize] += 1; // Post increment program counter
             match opcodes::from_integer(op) {
                 opcodes::OP_ADD => self.add(op),
@@ -92,22 +92,14 @@ impl VM {
                 opcodes::OP_LDI => self.ldi(op),
                 opcodes::OP_LDR => self.ldr(op),
                 opcodes::OP_LEA => self.lea(op),
-                // case OP_ST:
-                //     {ST, 7}
-                //     break;
-                // case OP_STI:
-                //     {STI, 7}
-                //     break;
-                // case OP_STR:
-                //     {STR, 7}
-                //     break;
+                opcodes::OP_ST => self.st(op),
+                opcodes::OP_STI => self.sti(op),
+                opcodes::OP_STR => self.str(op),
                 // case OP_TRAP:
                 //     {TRAP, 8}
                 //     break;
                 _ => (),
             }
-
-            let op = instr >> 12;
         }
     }
     fn add(&mut self, instr: u16) {
@@ -224,8 +216,35 @@ impl VM {
         self.update_flags(dr);
     }
 
-    fn lea(&mut self, instr: u16){
+    fn lea(&mut self, instr: u16) {
+        /* destination register (DR) */
+        let r0 = (instr >> 9) & 0x7;
+        /* PCoffset 9*/
+        let pc_offset = sign_extend(instr & 0x1ff, 9);
+        /* add pc_offset to the current PC, look at that memory location to get the final address */
+        self.reg[r0 as usize] = self.reg[registers::R_PC as usize] + pc_offset;
+        self.update_flags(r0);
+    }
 
+    fn st(&mut self, instr: u16) {
+        let sr = (instr >> 9) & 0x7;
+        /* PCoffset 9*/
+        let pc_offset = sign_extend(instr & 0x1ff, 9);
+        mem_write(self.reg[registers::R_PC as usize] + pc_offset, self.reg[sr as usize]);
+    }
+
+    fn sti(&mut self, instr: u16){
+        let sr = (instr >> 9) & 0x7;
+        /* PCoffset 9*/
+        let pc_offset = sign_extend(instr & 0x1ff, 9);
+        mem_write(mem_read(self.reg[registers::R_PC as usize] + pc_offset), self.reg[sr as usize]);
+    }
+
+    fn str(&mut self, instr: u16){
+        let sr = (instr >> 9) & 0x7;
+        let offset: u16 = sign_extend(instr & 0b11_1111, 6);
+        let baser = (instr >> 6) & 0b111;
+        mem_write(self.reg[baser as usize] + offset, self.reg[sr as usize]);
     }
 }
 
@@ -245,6 +264,10 @@ fn main() {
 
 fn mem_read(address: u16) -> u16 {
     0
+    //TODO!
+}
+
+fn mem_write(adress: u16, val: u16){
     //TODO!
 }
 
