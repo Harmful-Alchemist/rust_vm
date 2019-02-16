@@ -1,4 +1,9 @@
-enum registers {
+use std::io::stdout;
+use std::io::Read;
+use std::io::Write;
+use std::process;
+
+enum Registers {
     R_R0 = 0,
     R_R1,
     R_R2,
@@ -53,6 +58,21 @@ impl opcodes {
     }
 }
 
+enum trap_codes {
+    TRAP_GETC = 0x20,  /* get character from keyboard */
+    TRAP_OUT = 0x21,   /* output a character */
+    TRAP_PUTS = 0x22,  /* output a word string */
+    TRAP_IN = 0x23,    /* input a string */
+    TRAP_PUTSP = 0x24, /* output a byte string */
+    TRAP_HALT = 0x25,  /* halt the program */
+}
+
+impl trap_codes {
+    fn from_integer(x: u16) -> trap_codes {
+        unsafe { std::mem::transmute::<u8, trap_codes>(x as u8) }
+    }
+}
+
 enum condition_flags {
     FL_POS = 1 << 0,
     /* P */
@@ -64,7 +84,7 @@ enum condition_flags {
 
 struct VM {
     memory: [u16; std::u16::MAX as usize],
-    reg: [u16; registers::R_COUNT as usize],
+    reg: [u16; Registers::R_COUNT as usize],
 }
 
 impl VM {
@@ -73,14 +93,14 @@ impl VM {
             PC_START = 0x3000,
         };
 
-        self.reg[registers::R_PC as usize] = position::PC_START as u16;
+        self.reg[Registers::R_PC as usize] = position::PC_START as u16;
 
         let running = true;
         while running {
             /* FETCH */
-            let instr = mem_read(self.reg[registers::R_PC as usize]);
+            let instr = self.mem_read(self.reg[Registers::R_PC as usize]);
             let op = instr >> 12;
-            self.reg[registers::R_PC as usize] += 1; // Post increment program counter
+            self.reg[Registers::R_PC as usize] += 1; // Post increment program counter
             match opcodes::from_integer(op) {
                 opcodes::OP_ADD => self.add(op),
                 opcodes::OP_AND => self.and(op),
@@ -95,9 +115,7 @@ impl VM {
                 opcodes::OP_ST => self.st(op),
                 opcodes::OP_STI => self.sti(op),
                 opcodes::OP_STR => self.str(op),
-                // case OP_TRAP:
-                //     {TRAP, 8}
-                //     break;
+                opcodes::OP_TRAP => self.trap(op),
                 _ => (),
             }
         }
@@ -152,25 +170,25 @@ impl VM {
     fn br(&mut self, instr: u16) {
         let pc_offset = sign_extend((instr) & 0x1ff, 9);
         let cond_flag = (instr >> 9) & 0x7;
-        if cond_flag & self.reg[registers::R_COND as usize] > 0 {
-            self.reg[registers::R_PC as usize] += pc_offset;
+        if cond_flag & self.reg[Registers::R_COND as usize] > 0 {
+            self.reg[Registers::R_PC as usize] += pc_offset;
         }
     }
 
     fn jmp(&mut self, instr: u16) {
         /* Also handles RET */
         let r1 = (instr >> 6) & 0x7;
-        self.reg[registers::R_PC as usize] = self.reg[r1 as usize];
+        self.reg[Registers::R_PC as usize] = self.reg[r1 as usize];
     }
 
     fn jsr(&mut self, instr: u16) {
         let jsr = (instr >> 11) & 1;
         if jsr > 0 {
             let pc_offset = sign_extend(instr & 0x7FF, 11);
-            self.reg[registers::R_PC as usize] += pc_offset;
+            self.reg[Registers::R_PC as usize] += pc_offset;
         } else {
             //jsrr
-            self.reg[registers::R_PC as usize] = (instr >> 6) & 0x7;
+            self.reg[Registers::R_PC as usize] = (instr >> 6) & 0x7;
         }
     }
 
@@ -180,13 +198,13 @@ impl VM {
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
         /* add pc_offset to the current PC, look at that memory location to get the final address */
-        self.reg[r0 as usize] = mem_read(self.reg[registers::R_PC as usize] + pc_offset);
+        self.reg[r0 as usize] = self.mem_read(self.reg[Registers::R_PC as usize] + pc_offset);
         self.update_flags(r0);
     }
 
     fn update_flags(&mut self, r: u16) {
         let r_val = self.reg[r as usize];
-        self.reg[registers::R_COND as usize] = if r_val > 0 {
+        self.reg[Registers::R_COND as usize] = if r_val > 0 {
             condition_flags::FL_ZRO as u16
         } else if (r_val >> 15) > 0 {
             condition_flags::FL_NEG as u16
@@ -201,7 +219,8 @@ impl VM {
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
         /* add pc_offset to the current PC, look at that memory location to get the final address */
-        self.reg[r0 as usize] = mem_read(mem_read(self.reg[registers::R_PC as usize] + pc_offset));
+        let read = self.mem_read(self.reg[Registers::R_PC as usize] + pc_offset);
+        self.reg[r0 as usize] = self.mem_read(read);
         self.update_flags(r0);
     }
 
@@ -212,7 +231,7 @@ impl VM {
         let dr = (instr >> 9) & 0b111;
         let baser = (instr >> 6) & 0b111;
 
-        self.reg[dr as usize] = mem_read(self.reg[baser as usize] + offset);
+        self.reg[dr as usize] = self.mem_read(self.reg[baser as usize] + offset);
         self.update_flags(dr);
     }
 
@@ -222,7 +241,7 @@ impl VM {
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
         /* add pc_offset to the current PC, look at that memory location to get the final address */
-        self.reg[r0 as usize] = self.reg[registers::R_PC as usize] + pc_offset;
+        self.reg[r0 as usize] = self.reg[Registers::R_PC as usize] + pc_offset;
         self.update_flags(r0);
     }
 
@@ -230,21 +249,104 @@ impl VM {
         let sr = (instr >> 9) & 0x7;
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
-        mem_write(self.reg[registers::R_PC as usize] + pc_offset, self.reg[sr as usize]);
+        self.mem_write(
+            self.reg[Registers::R_PC as usize] + pc_offset,
+            self.reg[sr as usize],
+        );
     }
 
-    fn sti(&mut self, instr: u16){
+    fn sti(&mut self, instr: u16) {
         let sr = (instr >> 9) & 0x7;
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
-        mem_write(mem_read(self.reg[registers::R_PC as usize] + pc_offset), self.reg[sr as usize]);
+        let read = self.mem_read(self.reg[Registers::R_PC as usize] + pc_offset);
+        self.mem_write(read, self.reg[sr as usize]);
     }
 
-    fn str(&mut self, instr: u16){
+    fn str(&mut self, instr: u16) {
         let sr = (instr >> 9) & 0x7;
+        /* PCoffset 6*/
         let offset: u16 = sign_extend(instr & 0b11_1111, 6);
         let baser = (instr >> 6) & 0b111;
-        mem_write(self.reg[baser as usize] + offset, self.reg[sr as usize]);
+        self.mem_write(self.reg[baser as usize] + offset, self.reg[sr as usize]);
+    }
+
+    fn trap(&mut self, instr: u16) {
+        match trap_codes::from_integer(instr & 0xFF) {
+            trap_codes::TRAP_GETC => self.get_character(),
+            trap_codes::TRAP_OUT => self.out(),
+            trap_codes::TRAP_PUTS => self.puts(),
+            trap_codes::TRAP_IN => self.scan(),
+            trap_codes::TRAP_PUTSP => self.putsp(),
+            trap_codes::TRAP_HALT => self.halt()
+        }
+    }
+
+    fn get_character(&mut self) {
+        let input: u16 = std::io::stdin()
+            .bytes()
+            .next()
+            .and_then(|result| result.ok())
+            .map(|byte| byte as u16)
+            .expect("Could not read character!");
+
+        self.reg[Registers::R_R0 as usize] = input & 0b1111_1111; 
+    }
+
+    fn out(&mut self){
+        print!("{}", self.reg[Registers::R_R0 as usize] as u8 as char);
+        stdout().flush().expect("Could not print!");
+    }
+
+    fn puts(&mut self) {
+        let mut addr = self.reg[Registers::R_R0 as usize];
+        let mut character = self.memory[addr as usize];
+
+        while character != 0 {
+            print!("{}", (character & 0b1111_1111) as u8 as char); //Hmmmm.......
+            addr = addr + 1;
+            character = self.memory[addr as usize];
+        }
+        stdout().flush().expect("Could not print!");
+    }
+
+    // in
+    fn scan(&mut self){
+        print!("Enter a character: ");
+        stdout().flush().expect("Could not print!");
+
+        self.get_character();
+    }
+
+    fn putsp(&mut self){
+        let mut addr = self.reg[Registers::R_R0 as usize];
+        let mut character = self.memory[addr as usize];
+
+        while character != 0 {
+            print!("{}", (character & 0b1111_1111) as u8 as char);
+            let second_part = (character >> 8) & 0b1111_1111;
+            if second_part == 0{
+                break;
+            }
+            print!("{}", second_part as u8 as char);
+            addr = addr + 1;
+            character = self.memory[addr as usize];
+        }
+        stdout().flush().expect("Could not print!"); 
+    }
+
+    fn halt(&mut self){
+        println!("Goodbye!");
+        process::exit(0);
+    }
+
+    fn mem_write(&mut self, adress: u16, val: u16) {
+        self.memory[adress as usize] = val;
+    }
+
+    fn mem_read(&mut self, address: u16) -> u16 {
+        0
+        //TODO!
     }
 }
 
@@ -252,7 +354,7 @@ fn main() {
     //  {Load Arguments, 12}
     //     {Setup, 12}
     let mut vm = VM {
-        reg: [0; registers::R_COUNT as usize],
+        reg: [0; Registers::R_COUNT as usize],
         memory: [0; std::u16::MAX as usize],
     };
     vm.start();
@@ -260,15 +362,6 @@ fn main() {
     /* 0x3000 is the default */
 
     // {Shutdown, 12}
-}
-
-fn mem_read(address: u16) -> u16 {
-    0
-    //TODO!
-}
-
-fn mem_write(adress: u16, val: u16){
-    //TODO!
 }
 
 fn sign_extend(x: u16, bit_count: i32) -> u16 {
