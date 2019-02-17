@@ -57,11 +57,9 @@ const TRAP_IN: u16 = 0x23;
 const TRAP_PutsTwo: u16 = 0x24;
 const TRAP_Halt: u16 = 0x25;
 
-enum ConditionFlags {
-    Positive = 1 << 0,
-    Zero = 1 << 1,
-    Negative = 1 << 2,
-}
+const Positive: u16 = 1 << 0;
+const Zero: u16 = 1 << 1;
+const Negative: u16 = 1 << 2;
 
 struct VM {
     memory: [u16; std::u16::MAX as usize + 1],
@@ -81,12 +79,16 @@ impl VM {
             /* FETCH */
             let instr = self.mem_read(self.reg[Registers::ProgramCounter as usize]);
             let op = instr >> 12;
-            println!(
-                "instruction {:#b} for op {:?}",
-                instr,
-                OperationCodes::from_integer(op)
-            );
+            // println!(
+            //     "instruction {:#b} for op {:?}",
+            //     instr,
+            //     OperationCodes::from_integer(op)
+            // );
             self.reg[Registers::ProgramCounter as usize] += 1; // Post increment program counter
+                                                               // println!(
+                                                               //     "Incremented program counter is {}",
+                                                               //     self.reg[Registers::ProgramCounter as usize]
+                                                               // );
             match OperationCodes::from_integer(op) {
                 OperationCodes::Add => self.add(instr),
                 OperationCodes::And => self.and(instr),
@@ -94,7 +96,7 @@ impl VM {
                 OperationCodes::Branch => self.branch(instr),
                 OperationCodes::Jump => self.jump(instr),
                 OperationCodes::JumpRegister => self.jump_register(instr),
-                OperationCodes::Load => self.load(op),
+                OperationCodes::Load => self.load(instr),
                 OperationCodes::LoadIndirect => self.load_indirect(instr),
                 OperationCodes::LoadRegister => self.load_register(instr),
                 OperationCodes::LoadEffectiveAddress => self.load_effective_address(instr),
@@ -111,7 +113,7 @@ impl VM {
         let mut buffer: [u8; 2] = [0; 2];
         program.read(&mut buffer).expect("Failed to read origin.");
         let mut origin = swap_endian(buffer);
-        println!("origin: {:#b}", origin);
+        // println!("origin: {:#b}", origin);
         loop {
             match program.read(&mut buffer) {
                 Ok(2) => {
@@ -132,6 +134,8 @@ impl VM {
     fn add(&mut self, instr: u16) {
         /* destination register (DR) */
         let r0 = (instr >> 9) & 0x7;
+        // println!("Adding, was {}", self.reg[r0 as usize]);
+
         /* first operand (SR1) */
         let r1 = (instr >> 6) & 0x7;
         /* whether we are in immediate mode */
@@ -144,7 +148,7 @@ impl VM {
             let r2 = instr & 0x7;
             self.reg[r0 as usize] = self.reg[r1 as usize] + self.reg[r2 as usize];
         }
-
+        // println!("Adding, is now {}", self.reg[r0 as usize]);
         self.update_flags(r0);
     }
 
@@ -162,7 +166,6 @@ impl VM {
             let r2 = instr & 0x7;
             self.reg[r0 as usize] = self.reg[r1 as usize] & self.reg[r2 as usize];
         }
-
         self.update_flags(r0);
     }
 
@@ -179,8 +182,21 @@ impl VM {
     fn branch(&mut self, instr: u16) {
         let pc_offset = sign_extend((instr) & 0x1ff, 9);
         let cond_flag = (instr >> 9) & 0x7;
+        // println!(
+        //     "cond flag: {:#b} if test {}",
+        //     cond_flag,
+        //     (cond_flag & self.reg[Registers::Condition as usize])
+        // );
         if cond_flag & self.reg[Registers::Condition as usize] > 0 {
+            // println!(
+            //     "True branch! Program counter was {}",
+            //     self.reg[Registers::ProgramCounter as usize]
+            // );
             self.reg[Registers::ProgramCounter as usize] += pc_offset;
+            // println!(
+            //     "True branch! New program counter is {}",
+            //     self.reg[Registers::ProgramCounter as usize]
+            // );
         }
     }
 
@@ -191,6 +207,7 @@ impl VM {
     }
 
     fn jump_register(&mut self, instr: u16) {
+        self.reg[Registers::R7 as usize] = self.reg[Registers::ProgramCounter as usize];
         let jsr = (instr >> 11) & 1;
         if jsr > 0 {
             let pc_offset = sign_extend(instr & 0x7FF, 11);
@@ -207,19 +224,19 @@ impl VM {
         /* PCoffset 9*/
         let pc_offset = sign_extend(instr & 0x1ff, 9);
         /* add pc_offset to the current PC, look at that memory location to get the final address */
-        self.reg[r0 as usize] =
-            self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
+        let loaded = self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
+        self.reg[r0 as usize] = loaded;
         self.update_flags(r0);
     }
 
     fn update_flags(&mut self, r: u16) {
         let r_val = self.reg[r as usize];
-        self.reg[Registers::Condition as usize] = if r_val > 0 {
-            ConditionFlags::Zero as u16
+        self.reg[Registers::Condition as usize] = if r_val == 0 {
+            Zero
         } else if (r_val >> 15) > 0 {
-            ConditionFlags::Negative as u16
+            Negative
         } else {
-            ConditionFlags::Positive as u16
+            Positive
         }
     }
 
@@ -230,7 +247,9 @@ impl VM {
         let pc_offset = sign_extend(instr & 0x1ff, 9);
         /* add pc_offset to the current PC, look at that memory location to get the final address */
         let read = self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
+        //println!("register to read ldi: {:#b}", read);
         self.reg[r0 as usize] = self.mem_read(read);
+        //println!("Contents of that register: {:#b}", self.reg[r0 as usize]);
         self.update_flags(r0);
     }
 
@@ -282,8 +301,8 @@ impl VM {
     }
 
     fn trap(&mut self, instr: u16) {
-        println!("complete trap instruction {:#b}", instr);
-        println!("Got trap {:#b} or in hex {:#x}", instr & 0xFF, instr & 0xFF);
+        //println!("complete trap instruction {:#b}", instr);
+        //println!("Got trap {:#b} or in hex {:#x}", instr & 0xFF, instr & 0xFF);
         match instr & 0xFF {
             TRAP_GetCharacter => self.get_character(),
             TRAP_Out => self.out(),
@@ -295,19 +314,20 @@ impl VM {
     }
 
     fn get_character(&mut self) {
+        //TODO ignore enter
         let input: u16 = std::io::stdin()
-            .lock()
             .bytes()
             .next()
             .and_then(|result| result.ok())
             .map(|byte| byte as u16)
             .expect("Could not read character!");
-        println!("char was {}", input);
+        //println!("char was {}", input);
         self.reg[Registers::R0 as usize] = input & 0b1111_1111;
     }
 
     fn out(&mut self) {
         print!("{}", self.reg[Registers::R0 as usize] as u8 as char);
+        // println!(" as u16 {}", self.reg[Registers::R0 as usize]);
         stdout().flush().expect("Could not print!");
     }
 
@@ -315,7 +335,7 @@ impl VM {
         let mut addr = self.reg[Registers::R0 as usize];
         let mut character = self.memory[addr as usize];
 
-        while character != 0 {
+        while character > 0 {
             print!("{}", (character & 0b1111_1111) as u8 as char); //Hmmmm.......
             addr = addr + 1;
             character = self.memory[addr as usize];
@@ -335,7 +355,7 @@ impl VM {
         let mut addr = self.reg[Registers::R0 as usize];
         let mut character = self.memory[addr as usize];
 
-        while character != 0 {
+        while character > 0 {
             print!("{}", (character & 0b1111_1111) as u8 as char);
             let second_part = (character >> 8) & 0b1111_1111;
             if second_part == 0 {
@@ -359,19 +379,22 @@ impl VM {
 
     fn mem_read(&mut self, address: u16) -> u16 {
         if address == KeyboardStatusRegister {
-            println!("Reading keyboard!");
-            match stdin().lock().bytes().next() {
+            // println!("Reading keyboard!");
+            match stdin().bytes().next() {
                 //TODO is this even correct? needs a timeout?
                 None => {
-                    println!("Didn't read a byte from the keyboard.");
+                    // println!("Didn't read a byte from the keyboard.");
                     self.memory[KeyboardStatusRegister as usize] = 0;
                 }
                 Some(a_byte) => {
-                    let character = a_byte.expect("Could not read input.");
-                    println!("Read from keyboard char: {}", character);
-                    if character != 10 { //TODO ignore enters, but thats weird........
+                    let character = a_byte.expect("Could not read input.") as u16;
+                    // println!("Read from keyboard char: {}", character);
+                    if character != 10 {
+                        //TODO ignore enters, but thats weird........
                         self.memory[KeyboardStatusRegister as usize] = 1 << 15;
-                        self.memory[KeyboardDataRegister as usize] = character as u16;
+                        self.memory[KeyboardDataRegister as usize] = character;
+                    } else {
+                        self.memory[KeyboardStatusRegister as usize] = 0;
                     }
                 }
             }
@@ -402,8 +425,9 @@ fn swap_endian(original: [u8; 2]) -> u16 {
 
 fn sign_extend(x: u16, bit_count: i32) -> u16 {
     let mut y = x;
-    if (x >> (bit_count - 1)) & 1 > 0 {
-        y = x | (0xFFFF << bit_count);
+    // for negative numbers
+    if ((y >> (bit_count - 1)) & 1) > 0 {
+        y |= 0xFFFF << bit_count;
     }
     y
 }
