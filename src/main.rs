@@ -1,7 +1,14 @@
+use std::io::stdin;
 use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
-use std::process;
+// use std::process;
+use std::env;
+use std::fs::File;
+use std::io::prelude::*;
+
+const KeyboardStatusRegister: u16 = 0xFE00;
+const KeyboardDataRegister: u16 = 0xFE02;
 
 enum Registers {
     R0 = 0,
@@ -17,6 +24,7 @@ enum Registers {
     Count,
 }
 
+#[derive(Debug)]
 enum OperationCodes {
     Branch = 0,
     Add,
@@ -42,20 +50,12 @@ impl OperationCodes {
     }
 }
 
-enum TrapCodes {
-    GetCharacter = 0x20,
-    Out = 0x21,
-    Puts = 0x22,
-    TRAP_IN = 0x23,
-    PutsTwo = 0x24,
-    Halt = 0x25,
-}
-
-impl TrapCodes {
-    fn from_integer(x: u16) -> TrapCodes {
-        unsafe { std::mem::transmute::<u8, TrapCodes>(x as u8) }
-    }
-}
+const TRAP_GetCharacter: u16 = 0x20;
+const TRAP_Out: u16 = 0x21;
+const TRAP_Puts: u16 = 0x22;
+const TRAP_IN: u16 = 0x23;
+const TRAP_PutsTwo: u16 = 0x24;
+const TRAP_Halt: u16 = 0x25;
 
 enum ConditionFlags {
     Positive = 1 << 0,
@@ -64,41 +64,71 @@ enum ConditionFlags {
 }
 
 struct VM {
-    memory: [u16; std::u16::MAX as usize],
-    reg: [u16; Registers::Count as usize],
+    memory: [u16; std::u16::MAX as usize + 1],
+    reg: [u16; Registers::Count as usize + 1],
+    running: bool,
 }
 
 impl VM {
-    fn start(&mut self) {
-        let StartPosition: u16 = 0x3000;
+    fn start(&mut self, mut program: File) {
+        self.read_program(program);
+        let start_position: u16 = 0x3000;
 
-        self.reg[Registers::ProgramCounter as usize] = StartPosition;
+        self.reg[Registers::ProgramCounter as usize] = start_position;
 
-        let running = true;
-        while running {
+        self.running = true;
+        while self.running {
             /* FETCH */
             let instr = self.mem_read(self.reg[Registers::ProgramCounter as usize]);
             let op = instr >> 12;
+            println!(
+                "instruction {:#b} for op {:?}",
+                instr,
+                OperationCodes::from_integer(op)
+            );
             self.reg[Registers::ProgramCounter as usize] += 1; // Post increment program counter
             match OperationCodes::from_integer(op) {
-                OperationCodes::Add => self.add(op),
-                OperationCodes::And => self.and(op),
-                OperationCodes::Not => self.not(op),
-                OperationCodes::Branch => self.branch(op),
-                OperationCodes::Jump => self.jump(op),
-                OperationCodes::JumpRegister => self.jump_register(op),
+                OperationCodes::Add => self.add(instr),
+                OperationCodes::And => self.and(instr),
+                OperationCodes::Not => self.not(instr),
+                OperationCodes::Branch => self.branch(instr),
+                OperationCodes::Jump => self.jump(instr),
+                OperationCodes::JumpRegister => self.jump_register(instr),
                 OperationCodes::Load => self.load(op),
-                OperationCodes::LoadIndirect => self.load_indirect(op),
-                OperationCodes::LoadRegister => self.load_register(op),
-                OperationCodes::LoadEffectiveAddress => self.load_effective_address(op),
-                OperationCodes::Store => self.store(op),
-                OperationCodes::StoreIndirect => self.store_indirect(op),
-                OperationCodes::StoreRegister => self.store_register(op),
-                OperationCodes::Trap => self.trap(op),
-                _ => (),
+                OperationCodes::LoadIndirect => self.load_indirect(instr),
+                OperationCodes::LoadRegister => self.load_register(instr),
+                OperationCodes::LoadEffectiveAddress => self.load_effective_address(instr),
+                OperationCodes::Store => self.store(instr),
+                OperationCodes::StoreIndirect => self.store_indirect(instr),
+                OperationCodes::StoreRegister => self.store_register(instr),
+                OperationCodes::Trap => self.trap(instr),
+                _ => panic!("Unknown instruction {:#b}", instr),
             }
         }
     }
+
+    fn read_program(&mut self, mut program: File) {
+        let mut buffer: [u8; 2] = [0; 2];
+        program.read(&mut buffer).expect("Failed to read origin.");
+        let mut origin = swap_endian(buffer);
+        println!("origin: {:#b}", origin);
+        loop {
+            match program.read(&mut buffer) {
+                Ok(2) => {
+                    self.memory[origin as usize] = swap_endian(buffer);
+                    origin = origin + 1;
+                }
+                Ok(0) => break,
+                Ok(_) => {
+                    panic!("Unexpected error reading program.");
+                }
+                Err(_) => {
+                    panic!("Unexpected error reading program.");
+                }
+            }
+        }
+    }
+
     fn add(&mut self, instr: u16) {
         /* destination register (DR) */
         let r0 = (instr >> 9) & 0x7;
@@ -252,24 +282,27 @@ impl VM {
     }
 
     fn trap(&mut self, instr: u16) {
-        match TrapCodes::from_integer(instr & 0xFF) {
-            TrapCodes::GetCharacter => self.get_character(),
-            TrapCodes::Out => self.out(),
-            TrapCodes::Puts => self.puts(),
-            TrapCodes::TRAP_IN => self.scan(),
-            TrapCodes::PutsTwo => self.putsp(),
-            TrapCodes::Halt => self.halt(),
+        println!("complete trap instruction {:#b}", instr);
+        println!("Got trap {:#b} or in hex {:#x}", instr & 0xFF, instr & 0xFF);
+        match instr & 0xFF {
+            TRAP_GetCharacter => self.get_character(),
+            TRAP_Out => self.out(),
+            TRAP_Puts => self.puts(),
+            TRAP_TRAP_IN => self.scan(),
+            TRAP_PutsTwo => self.putsp(),
+            TRAP_Halt => self.halt(),
         }
     }
 
     fn get_character(&mut self) {
         let input: u16 = std::io::stdin()
+            .lock()
             .bytes()
             .next()
             .and_then(|result| result.ok())
             .map(|byte| byte as u16)
             .expect("Could not read character!");
-
+        println!("char was {}", input);
         self.reg[Registers::R0 as usize] = input & 0b1111_1111;
     }
 
@@ -317,7 +350,7 @@ impl VM {
 
     fn halt(&mut self) {
         println!("Goodbye!");
-        process::exit(0);
+        self.running = false;
     }
 
     fn mem_write(&mut self, adress: u16, val: u16) {
@@ -325,23 +358,46 @@ impl VM {
     }
 
     fn mem_read(&mut self, address: u16) -> u16 {
-        0
-        //TODO!
+        if address == KeyboardStatusRegister {
+            println!("Reading keyboard!");
+            match stdin().lock().bytes().next() {
+                //TODO is this even correct? needs a timeout?
+                None => {
+                    println!("Didn't read a byte from the keyboard.");
+                    self.memory[KeyboardStatusRegister as usize] = 0;
+                }
+                Some(a_byte) => {
+                    let character = a_byte.expect("Could not read input.");
+                    println!("Read from keyboard char: {}", character);
+                    if character != 10 { //TODO ignore enters, but thats weird........
+                        self.memory[KeyboardStatusRegister as usize] = 1 << 15;
+                        self.memory[KeyboardDataRegister as usize] = character as u16;
+                    }
+                }
+            }
+        }
+        self.memory[address as usize]
     }
 }
 
 fn main() {
-    //  {Load Arguments, 12}
-    //     {Setup, 12}
-    let mut vm = VM {
-        reg: [0; Registers::Count as usize],
-        memory: [0; std::u16::MAX as usize],
-    };
-    vm.start();
-    /* set the PC to starting position */
-    /* 0x3000 is the default */
+    //TODO ???? disable and re-enable input buffering?????
 
-    // {Shutdown, 12}
+    let mut vm = VM {
+        reg: [0; Registers::Count as usize + 1],
+        memory: [0; std::u16::MAX as usize + 1],
+        running: false,
+    };
+
+    let args: Vec<String> = env::args().collect();
+    let location = &args[1];
+    let mut program = File::open(location).expect("Could not open program"); //TODO print file unable to open TODO mut
+
+    vm.start(program);
+}
+
+fn swap_endian(original: [u8; 2]) -> u16 {
+    original[1] as u16 + ((original[0] as u16) << 8) //TODO the right way?
 }
 
 fn sign_extend(x: u16, bit_count: i32) -> u16 {
