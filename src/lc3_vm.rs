@@ -3,15 +3,14 @@ pub mod lc3_vm {
     use std::io::stdout;
     use std::io::Read;
     use std::io::Write;
-    use std::env;
     use std::fs::File;
-    use std::io::prelude::*;
 
-    const KeyboardStatusRegister: u16 = 0xFE00;
-    const KeyboardDataRegister: u16 = 0xFE02;
+    const KEYBOARD_STATUS_REGISTER: u16 = 0xFE00;
+    const KEYBOARD_DATA_REGISTER: u16 = 0xFE02;
 
+    #[allow(dead_code)]
     pub enum Registers {
-        R0 = 0,
+        R0,
         R1,
         R2,
         R3,
@@ -25,8 +24,9 @@ pub mod lc3_vm {
     }
 
     #[derive(Debug)]
+    #[allow(dead_code)]
     enum OperationCodes {
-        Branch = 0,
+        Branch,
         Add,
         Load,
         Store,
@@ -50,16 +50,16 @@ pub mod lc3_vm {
         }
     }
 
-    const TRAP_GetCharacter: u16 = 0x20;
-    const TRAP_Out: u16 = 0x21;
-    const TRAP_Puts: u16 = 0x22;
+    const TRAP_GET_CHARACTER: u16 = 0x20;
+    const TRAP_OUT: u16 = 0x21;
+    const TRAP_PUTS: u16 = 0x22;
     const TRAP_IN: u16 = 0x23;
-    const TRAP_PutsTwo: u16 = 0x24;
-    const TRAP_Halt: u16 = 0x25;
+    const TRAP_PUTS_TWO: u16 = 0x24;
+    const TRAP_HALT: u16 = 0x25;
 
-    const Positive: u16 = 1 << 0;
-    const Zero: u16 = 1 << 1;
-    const Negative: u16 = 1 << 2;
+    const POSITIVE: u16 = 1 << 0;
+    const ZERO: u16 = 1 << 1;
+    const NEGATIVE: u16 = 1 << 2;
 
     pub struct VM {
         memory: [u16; std::u16::MAX as usize + 1],
@@ -76,7 +76,7 @@ pub mod lc3_vm {
             }
         }
 
-        pub fn start(&mut self, mut program: File) {
+        pub fn start(&mut self, program: File) {
             self.read_program(program);
             let start_position: u16 = 0x3000;
 
@@ -238,13 +238,14 @@ pub mod lc3_vm {
         }
 
         fn update_flags(&mut self, r: u16) {
+            //println!("Updating flags!");
             let r_val = self.reg[r as usize];
             self.reg[Registers::Condition as usize] = if r_val == 0 {
-                Zero
+                ZERO
             } else if (r_val >> 15) > 0 {
-                Negative
+                NEGATIVE
             } else {
-                Positive
+                POSITIVE
             }
         }
 
@@ -312,12 +313,13 @@ pub mod lc3_vm {
             //println!("complete trap instruction {:#b}", instr);
             //println!("Got trap {:#b} or in hex {:#x}", instr & 0xFF, instr & 0xFF);
             match instr & 0xFF {
-                TRAP_GetCharacter => self.get_character(),
-                TRAP_Out => self.out(),
-                TRAP_Puts => self.puts(),
-                TRAP_TRAP_IN => self.scan(),
-                TRAP_PutsTwo => self.putsp(),
-                TRAP_Halt => self.halt(),
+                TRAP_GET_CHARACTER => self.get_character(),
+                TRAP_OUT => self.out(),
+                TRAP_PUTS => self.puts(),
+                TRAP_IN => self.scan(),
+                TRAP_PUTS_TWO => self.putsp(),
+                TRAP_HALT => self.halt(),
+                _ => panic!("Unknown trap code {:#b}", instr)
             }
         }
 
@@ -386,23 +388,23 @@ pub mod lc3_vm {
         }
 
         fn mem_read(&mut self, address: u16) -> u16 {
-            if address == KeyboardStatusRegister {
+            if address == KEYBOARD_STATUS_REGISTER {
                 // println!("Reading keyboard!");
                 match stdin().bytes().next() {
                     //TODO is this even correct? needs a timeout?
                     None => {
                         // println!("Didn't read a byte from the keyboard.");
-                        self.memory[KeyboardStatusRegister as usize] = 0;
+                        self.memory[KEYBOARD_STATUS_REGISTER as usize] = 0;
                     }
                     Some(a_byte) => {
                         let character = a_byte.expect("Could not read input.") as u16;
                         // println!("Read from keyboard char: {}", character);
                         if character != 10 {
                             //TODO ignore enters, but thats weird........
-                            self.memory[KeyboardStatusRegister as usize] = 1 << 15;
-                            self.memory[KeyboardDataRegister as usize] = character;
+                            self.memory[KEYBOARD_STATUS_REGISTER as usize] = 1 << 15;
+                            self.memory[KEYBOARD_DATA_REGISTER as usize] = character;
                         } else {
-                            self.memory[KeyboardStatusRegister as usize] = 0;
+                            self.memory[KEYBOARD_STATUS_REGISTER as usize] = 0;
                         }
                     }
                 }
@@ -422,5 +424,45 @@ pub mod lc3_vm {
             y |= 0xFFFF << bit_count;
         }
         y
+    }
+
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn can_sign_extend() {
+            assert_eq!(sign_extend(0b1, 1), 65535, "Could not correctly sign extend number!");
+            assert_eq!(sign_extend(0b101, 3), 65533, "Could not correctly sign extend number!");
+        }
+
+        #[test]
+        fn can_swap_endian() {
+            assert_eq!(swap_endian([0b00000000, 0b11111111]), 0b00000000_11111111, "Could not swap endianness!")
+        }
+
+        #[test]
+        fn can_add_indirect() {
+            let mut vm = VM::new();
+            vm.reg[Registers::R2 as usize] = 0;
+            vm.reg[Registers::R3 as usize] = 1;
+            vm.reg[Registers::R4 as usize] = 3;
+            vm.add(0b0001_010_011_0_00_100);
+
+            assert_eq!(vm.reg[Registers::R2 as usize], 4, "Could not add indirectly!");
+            assert_eq!(vm.reg[Registers::Condition as usize], POSITIVE, "Condition register not updated correctly!")
+        }
+
+        #[test]
+        fn can_add_immediate() {
+            let mut vm = VM::new();
+            vm.reg[Registers::R2 as usize] = 0;
+            vm.reg[Registers::R3 as usize] = 1;
+            vm.add(0b0001_010_011_1_10010);
+
+            assert_eq!(vm.reg[Registers::R2 as usize], 65523, "Could not add immediately!"); //Two's complement
+            assert_eq!(vm.reg[Registers::Condition as usize], NEGATIVE, "Condition register not updated correctly!")
+        }
     }
 }
