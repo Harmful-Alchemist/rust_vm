@@ -63,14 +63,14 @@ pub mod lc3_vm {
 
     pub struct VM {
         memory: [u16; std::u16::MAX as usize + 1],
-        reg: [u16; Registers::Count as usize + 1],
+        registers: [u16; Registers::Count as usize + 1],
         running: bool,
     }
 
     impl VM {
         pub fn new() -> VM {
             VM {
-                reg: [0; crate::lc3_vm::lc3_vm::Registers::Count as usize + 1],
+                registers: [0; crate::lc3_vm::lc3_vm::Registers::Count as usize + 1],
                 memory: [0; std::u16::MAX as usize + 1],
                 running: false,
             }
@@ -80,19 +80,19 @@ pub mod lc3_vm {
             self.read_program(program);
             let start_position: u16 = 0x3000;
 
-            self.reg[Registers::ProgramCounter as usize] = start_position;
+            self.registers[Registers::ProgramCounter as usize] = start_position;
 
             self.running = true;
             while self.running {
                 /* FETCH */
-                let instr = self.mem_read(self.reg[Registers::ProgramCounter as usize]);
+                let instr = self.mem_read(self.registers[Registers::ProgramCounter as usize]);
                 let op = instr >> 12;
                 // println!(
                 //     "instruction {:#b} for op {:?}",
                 //     instr,
                 //     OperationCodes::from_integer(op)
                 // );
-                self.reg[Registers::ProgramCounter as usize] += 1; // Post increment program counter
+                self.registers[Registers::ProgramCounter as usize] += 1; // Post increment program counter
                 // println!(
                 //     "Incremented program counter is {}",
                 //     self.reg[Registers::ProgramCounter as usize]
@@ -139,6 +139,51 @@ pub mod lc3_vm {
             }
         }
 
+                /// ### Assembler Formats
+        /// **ADD DR, SR1, SR2 \
+        /// ADD DR, SR1, imm5**
+        ///
+        /// ### Encodings
+        /// | 0001  | SR1  | 0   | 00  | SR2 |
+        /// |-------|------|-----|-----|-----|
+        /// | 15...12 | 11..9 | 8..6 | 4..3 | 2..0 |
+        ///
+        ///
+        /// | 0001  | SR1  | 0   | imm5  |
+        /// |-------|------|-----|-----|
+        /// | 15...12 | 11..9 | 8..6 | 4..0|
+        /// ### Operation
+        /// if (bit[5] == 0)
+        /// 	DR = SR1 + SR2;
+        /// else
+        /// 	DR = SR1 + SEXT(imm5);
+        /// setcc();
+        ///
+        /// ### Description
+        /// If bit [5] is 0, the second source operand is obtained from SR2. If bit [5] is 1, the second source operand is obtained by sign-extending the imm5 field to 16 bits. In both cases, the second source operand is added to the contents of SR1 and the result stored in DR. The condition codes are set, based on whether the result is negative, zero, or positive.
+        ///
+        /// ### Examples
+        /// ADD R2, R3, R4 ; R2 ← R3 + R4
+        /// ```rust
+        /// let mut vm = VM::new();
+        /// vm.registers[Registers::R2 as usize] = 0;
+        /// vm.registers[Registers::R3 as usize] = 1;
+        /// vm.registers[Registers::R4 as usize] = 3;
+        /// vm.add(0b0001_010_011_0_00_100);
+        ///
+        /// assert_eq!(vm.registers[Registers::R2 as usize], 4, "Could not add indirectly!");
+        /// assert_eq!(vm.registers[Registers::Condition as usize], POSITIVE, "Condition register not updated correctly!")
+        /// ```
+        /// ADD R2, R3, #7 ; R2 ← R3 + 7
+        /// ```rust
+        /// let mut vm = VM::new();
+        /// vm.registers[Registers::R2 as usize] = 0;
+        /// vm.registers[Registers::R3 as usize] = 1;
+        /// vm.add(0b0001_010_011_1_10010);
+        ///
+        /// assert_eq!(vm.registers[Registers::R2 as usize], 65523, "Could not add immediately!"); //Two's complement
+        /// assert_eq!(vm.registers[Registers::Condition as usize], NEGATIVE, "Condition register not updated correctly!")
+        /// ```
         fn add(&mut self, instr: u16) {
             /* destination register (DR) */
             let r0 = (instr >> 9) & 0x7;
@@ -151,10 +196,10 @@ pub mod lc3_vm {
 
             if imm_flag > 0 {
                 let imm5 = sign_extend(instr & 0x1F, 5);
-                self.reg[r0 as usize] = self.reg[r1 as usize] + imm5;
+                self.registers[r0 as usize] = self.registers[r1 as usize] + imm5;
             } else {
                 let r2 = instr & 0x7;
-                self.reg[r0 as usize] = self.reg[r1 as usize] + self.reg[r2 as usize];
+                self.registers[r0 as usize] = self.registers[r1 as usize] + self.registers[r2 as usize];
             }
             // println!("Adding, is now {}", self.reg[r0 as usize]);
             self.update_flags(r0);
@@ -169,10 +214,10 @@ pub mod lc3_vm {
             let imm_flag = (instr >> 5) & 0x1;
             if imm_flag > 0 {
                 let imm5 = sign_extend(instr & 0x1F, 5);
-                self.reg[r0 as usize] = self.reg[r1 as usize] & imm5;
+                self.registers[r0 as usize] = self.registers[r1 as usize] & imm5;
             } else {
                 let r2 = instr & 0x7;
-                self.reg[r0 as usize] = self.reg[r1 as usize] & self.reg[r2 as usize];
+                self.registers[r0 as usize] = self.registers[r1 as usize] & self.registers[r2 as usize];
             }
             self.update_flags(r0);
         }
@@ -183,7 +228,7 @@ pub mod lc3_vm {
             /* operand (SR) */
             let r1 = (instr >> 6) & 0x7;
 
-            self.reg[r0 as usize] = !(self.reg[r1 as usize]);
+            self.registers[r0 as usize] = !(self.registers[r1 as usize]);
             self.update_flags(r0);
         }
 
@@ -195,12 +240,12 @@ pub mod lc3_vm {
             //     cond_flag,
             //     (cond_flag & self.reg[Registers::Condition as usize])
             // );
-            if cond_flag & self.reg[Registers::Condition as usize] > 0 {
+            if cond_flag & self.registers[Registers::Condition as usize] > 0 {
                 // println!(
                 //     "True branch! Program counter was {}",
                 //     self.reg[Registers::ProgramCounter as usize]
                 // );
-                self.reg[Registers::ProgramCounter as usize] += pc_offset;
+                self.registers[Registers::ProgramCounter as usize] += pc_offset;
                 // println!(
                 //     "True branch! New program counter is {}",
                 //     self.reg[Registers::ProgramCounter as usize]
@@ -211,18 +256,18 @@ pub mod lc3_vm {
         fn jump(&mut self, instr: u16) {
             /* Also handles RET */
             let r1 = (instr >> 6) & 0x7;
-            self.reg[Registers::ProgramCounter as usize] = self.reg[r1 as usize];
+            self.registers[Registers::ProgramCounter as usize] = self.registers[r1 as usize];
         }
 
         fn jump_register(&mut self, instr: u16) {
-            self.reg[Registers::R7 as usize] = self.reg[Registers::ProgramCounter as usize];
+            self.registers[Registers::R7 as usize] = self.registers[Registers::ProgramCounter as usize];
             let jsr = (instr >> 11) & 1;
             if jsr > 0 {
                 let pc_offset = sign_extend(instr & 0x7FF, 11);
-                self.reg[Registers::ProgramCounter as usize] += pc_offset;
+                self.registers[Registers::ProgramCounter as usize] += pc_offset;
             } else {
                 //jsrr
-                self.reg[Registers::ProgramCounter as usize] = (instr >> 6) & 0x7;
+                self.registers[Registers::ProgramCounter as usize] = (instr >> 6) & 0x7;
             }
         }
 
@@ -232,15 +277,15 @@ pub mod lc3_vm {
             /* PCoffset 9*/
             let pc_offset = sign_extend(instr & 0x1ff, 9);
             /* add pc_offset to the current PC, look at that memory location to get the final address */
-            let loaded = self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
-            self.reg[r0 as usize] = loaded;
+            let loaded = self.mem_read(self.registers[Registers::ProgramCounter as usize] + pc_offset);
+            self.registers[r0 as usize] = loaded;
             self.update_flags(r0);
         }
 
         fn update_flags(&mut self, r: u16) {
             //println!("Updating flags!");
-            let r_val = self.reg[r as usize];
-            self.reg[Registers::Condition as usize] = if r_val == 0 {
+            let r_val = self.registers[r as usize];
+            self.registers[Registers::Condition as usize] = if r_val == 0 {
                 ZERO
             } else if (r_val >> 15) > 0 {
                 NEGATIVE
@@ -255,9 +300,9 @@ pub mod lc3_vm {
             /* PCoffset 9*/
             let pc_offset = sign_extend(instr & 0x1ff, 9);
             /* add pc_offset to the current PC, look at that memory location to get the final address */
-            let read = self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
+            let read = self.mem_read(self.registers[Registers::ProgramCounter as usize] + pc_offset);
             //println!("register to read ldi: {:#b}", read);
-            self.reg[r0 as usize] = self.mem_read(read);
+            self.registers[r0 as usize] = self.mem_read(read);
             //println!("Contents of that register: {:#b}", self.reg[r0 as usize]);
             self.update_flags(r0);
         }
@@ -269,7 +314,7 @@ pub mod lc3_vm {
             let dr = (instr >> 9) & 0b111;
             let baser = (instr >> 6) & 0b111;
 
-            self.reg[dr as usize] = self.mem_read(self.reg[baser as usize] + offset);
+            self.registers[dr as usize] = self.mem_read(self.registers[baser as usize] + offset);
             self.update_flags(dr);
         }
 
@@ -279,7 +324,7 @@ pub mod lc3_vm {
             /* PCoffset 9*/
             let pc_offset = sign_extend(instr & 0x1ff, 9);
             /* add pc_offset to the current PC, look at that memory location to get the final address */
-            self.reg[r0 as usize] = self.reg[Registers::ProgramCounter as usize] + pc_offset;
+            self.registers[r0 as usize] = self.registers[Registers::ProgramCounter as usize] + pc_offset;
             self.update_flags(r0);
         }
 
@@ -288,8 +333,8 @@ pub mod lc3_vm {
             /* PCoffset 9*/
             let pc_offset = sign_extend(instr & 0x1ff, 9);
             self.mem_write(
-                self.reg[Registers::ProgramCounter as usize] + pc_offset,
-                self.reg[sr as usize],
+                self.registers[Registers::ProgramCounter as usize] + pc_offset,
+                self.registers[sr as usize],
             );
         }
 
@@ -297,8 +342,8 @@ pub mod lc3_vm {
             let sr = (instr >> 9) & 0x7;
             /* PCoffset 9*/
             let pc_offset = sign_extend(instr & 0x1ff, 9);
-            let read = self.mem_read(self.reg[Registers::ProgramCounter as usize] + pc_offset);
-            self.mem_write(read, self.reg[sr as usize]);
+            let read = self.mem_read(self.registers[Registers::ProgramCounter as usize] + pc_offset);
+            self.mem_write(read, self.registers[sr as usize]);
         }
 
         fn store_register(&mut self, instr: u16) {
@@ -306,7 +351,7 @@ pub mod lc3_vm {
             /* PCoffset 6*/
             let offset: u16 = sign_extend(instr & 0b11_1111, 6);
             let baser = (instr >> 6) & 0b111;
-            self.mem_write(self.reg[baser as usize] + offset, self.reg[sr as usize]);
+            self.mem_write(self.registers[baser as usize] + offset, self.registers[sr as usize]);
         }
 
         fn trap(&mut self, instr: u16) {
@@ -332,17 +377,17 @@ pub mod lc3_vm {
                 .map(|byte| byte as u16)
                 .expect("Could not read character!");
             //println!("char was {}", input);
-            self.reg[Registers::R0 as usize] = input & 0b1111_1111;
+            self.registers[Registers::R0 as usize] = input & 0b1111_1111;
         }
 
         fn out(&mut self) {
-            print!("{}", self.reg[Registers::R0 as usize] as u8 as char);
+            print!("{}", self.registers[Registers::R0 as usize] as u8 as char);
             // println!(" as u16 {}", self.reg[Registers::R0 as usize]);
             stdout().flush().expect("Could not print!");
         }
 
         fn puts(&mut self) {
-            let mut addr = self.reg[Registers::R0 as usize];
+            let mut addr = self.registers[Registers::R0 as usize];
             let mut character = self.memory[addr as usize];
 
             while character > 0 {
@@ -362,7 +407,7 @@ pub mod lc3_vm {
         }
 
         fn putsp(&mut self) {
-            let mut addr = self.reg[Registers::R0 as usize];
+            let mut addr = self.registers[Registers::R0 as usize];
             let mut character = self.memory[addr as usize];
 
             while character > 0 {
@@ -445,24 +490,24 @@ pub mod lc3_vm {
         #[test]
         fn can_add_indirect() {
             let mut vm = VM::new();
-            vm.reg[Registers::R2 as usize] = 0;
-            vm.reg[Registers::R3 as usize] = 1;
-            vm.reg[Registers::R4 as usize] = 3;
+            vm.registers[Registers::R2 as usize] = 0;
+            vm.registers[Registers::R3 as usize] = 1;
+            vm.registers[Registers::R4 as usize] = 3;
             vm.add(0b0001_010_011_0_00_100);
 
-            assert_eq!(vm.reg[Registers::R2 as usize], 4, "Could not add indirectly!");
-            assert_eq!(vm.reg[Registers::Condition as usize], POSITIVE, "Condition register not updated correctly!")
+            assert_eq!(vm.registers[Registers::R2 as usize], 4, "Could not add indirectly!");
+            assert_eq!(vm.registers[Registers::Condition as usize], POSITIVE, "Condition register not updated correctly!")
         }
 
         #[test]
         fn can_add_immediate() {
             let mut vm = VM::new();
-            vm.reg[Registers::R2 as usize] = 0;
-            vm.reg[Registers::R3 as usize] = 1;
+            vm.registers[Registers::R2 as usize] = 0;
+            vm.registers[Registers::R3 as usize] = 1;
             vm.add(0b0001_010_011_1_10010);
 
-            assert_eq!(vm.reg[Registers::R2 as usize], 65523, "Could not add immediately!"); //Two's complement
-            assert_eq!(vm.reg[Registers::Condition as usize], NEGATIVE, "Condition register not updated correctly!")
+            assert_eq!(vm.registers[Registers::R2 as usize], 65523, "Could not add immediately!"); //Two's complement
+            assert_eq!(vm.registers[Registers::Condition as usize], NEGATIVE, "Condition register not updated correctly!")
         }
     }
 }

@@ -1,0 +1,45 @@
+        /// ### Assembler Formats
+        /// **ADD DR, SR1, SR2 \
+        /// ADD DR, SR1, imm5**
+        ///
+        /// ### Encodings
+        /// | 0001  | SR1  | 0   | 00  | SR2 |
+        /// |-------|------|-----|-----|-----|
+        /// | 15...12 | 11..9 | 8..6 | 4..3 | 2..0 |
+        ///
+        ///
+        /// | 0001  | SR1  | 0   | imm5  |
+        /// |-------|------|-----|-----|
+        /// | 15...12 | 11..9 | 8..6 | 4..0|
+        /// ### Operation
+        /// if (bit[5] == 0)
+        /// 	DR = SR1 + SR2;
+        /// else
+        /// 	DR = SR1 + SEXT(imm5);
+        /// setcc();
+        ///
+        /// ### Description
+        /// If bit [5] is 0, the second source operand is obtained from SR2. If bit [5] is 1, the second source operand is obtained by sign-extending the imm5 field to 16 bits. In both cases, the second source operand is added to the contents of SR1 and the result stored in DR. The condition codes are set, based on whether the result is negative, zero, or positive.
+        ///
+        /// ### Examples
+        /// ADD R2, R3, R4 ; R2 ← R3 + R4
+        /// ```rust
+        /// let mut vm = VM::new();
+        /// vm.registers[Registers::R2 as usize] = 0;
+        /// vm.registers[Registers::R3 as usize] = 1;
+        /// vm.registers[Registers::R4 as usize] = 3;
+        /// vm.add(0b0001_010_011_0_00_100);
+        ///
+        /// assert_eq!(vm.registers[Registers::R2 as usize], 4, "Could not add indirectly!");
+        /// assert_eq!(vm.registers[Registers::Condition as usize], POSITIVE, "Condition register not updated correctly!")
+        /// ```
+        /// ADD R2, R3, #7 ; R2 ← R3 + 7
+        /// ```rust
+        /// let mut vm = VM::new();
+        /// vm.registers[Registers::R2 as usize] = 0;
+        /// vm.registers[Registers::R3 as usize] = 1;
+        /// vm.add(0b0001_010_011_1_10010);
+        ///
+        /// assert_eq!(vm.registers[Registers::R2 as usize], 65523, "Could not add immediately!"); //Two's complement
+        /// assert_eq!(vm.registers[Registers::Condition as usize], NEGATIVE, "Condition register not updated correctly!")
+        /// ```
